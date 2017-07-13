@@ -24,15 +24,21 @@ departments The logic is still present, but is commented out.
 import os
 import sys
 
-import ldap_client
-
 from rdflib import Graph, URIRef, Literal, Namespace
 from rdflib import RDF, RDFS, XSD, OWL
 
 import csv
 import json
 from collections import defaultdict
+import requests
+
+import ldap_client
+from config import settings
 #from departmentMap import deptCodeMap
+
+query_url = settings.config['RAB_QUERY_API']
+email = settings.config['ADMIN_EMAIL']
+passw = settings.config['ADMIN_PASS']
 
 vivoName = "http://vivo.brown.edu/individual/"
 VIVO = Namespace('http://vivoweb.org/ontology/core#')
@@ -83,7 +89,7 @@ def read_banner_csv(bannerIn):
     return bannerRowList
 
 def get_vivo_shortIDs():
-    q = """
+    query = """
     PREFIX vivo: <http://vivoweb.org/ontology/core#>
     PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
     PREFIX blocal: <http://vivo.brown.edu/ontology/vivo-brown/>
@@ -95,11 +101,23 @@ def get_vivo_shortIDs():
       ?fac blocal:shortId ?shortID .
     }
     """
-    results = vstore.query(q)
-    for row in results:
-        shortID = row.shortID.toPython()
-        facURI = row.fac.toPython()
-        shortIdMap[shortID] = facURI
+    headers = {'Accept': 'text/csv', 'charset':'utf-8'} 
+    data = { 'email': email, 'password': passw, 'query': query }
+    resp = requests.post(query_url, data=data, headers=headers)
+    if resp.status_code == 200:
+        rdr = csv.reader(resp.text.split('\n'), delimiter=',')
+        rdr.next()
+        for row in rdr:
+            try:
+                facURI = row[0]
+                shortID = row[1]
+                shortIdMap[shortID] = facURI
+            except IndexError:
+                continue
+            except:
+                raise Exception
+    else:
+        raise Exception("Bad query!")
 
 def bruId_lookup_and_clean(courseRow):
     bruId = courseRow['INSTRUCTOR BROWN ID']
