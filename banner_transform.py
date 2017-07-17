@@ -30,6 +30,7 @@ from rdflib import RDF, RDFS, XSD, OWL
 import csv
 import json
 from collections import defaultdict
+import uuid
 import requests
 
 import ldap_client
@@ -138,6 +139,19 @@ def clean_title(courseTitle):
     title = " ".join(courseTitle.split())
     return title
 
+def make_uuid_uri(base, prefix):
+    for c in range(0,10):
+        new_uri = '{0}{1}-{2}'.format(base, prefix, uuid.uuid4().hex)
+        header = {'Accept': 'text/csv', 'charset':'utf-8'}
+        query = "ASK {{<{0}> ?p ?o}}"
+        data = {'email': email, 'password': passw, 'query': query.format(new_uri)}
+        resp = requests.post(query_url, data=data, headers=header)
+        if resp.content == 'false':
+            return URIRef(new_uri)
+        else:
+            continue
+    return None
+
 def row_cleanup(courseRow):
     '''
     The essential function for course munging
@@ -175,7 +189,9 @@ def row_cleanup(courseRow):
     if courseLabel in courseMap[courseKey]:
         courseURI = courseMap[courseKey][courseLabel]
     else:
-        courseURI = common.make_uuid_uri(vivoName, prefix='n')
+        courseURI = make_uuid_uri(vivoName, prefix='course')
+        if courseURI is None:
+            raise Exception("Failed to generate new uri")
         courseMap[courseKey][courseLabel] = courseURI
 
     courseRow['courseLabel'] = courseLabel
@@ -261,9 +277,10 @@ def main():
     g.bind("blocal",BLOCAL)
     g.bind("vivo",VIVO)
     g.bind("vitro", VITRO)
+    g.bind("owl", OWL)
 
     bannerRowList = read_banner_csv(
-        'data-files/Course_instructor_data_PROD_20170119.txt')
+        'data/in/Course_instructor_data_PROD_20170706.txt')
     get_vivo_shortIDs()
     
     matchedRows = [bruId_lookup_and_clean(courseRow)
@@ -275,7 +292,7 @@ def main():
 
     for stmt in statements:
         g.add(stmt)
-    print g.serialize(destination='banner_Winter2017.n3', format='n3')
+    print g.serialize(destination='data/out/banner_Spring2017.n3', format='n3')
 
 
 if __name__ == "__main__":
