@@ -17,6 +17,10 @@ Currently, all courses with the same label and taught by the same
 teacher are being merged into the same course (referenced with the 
 same URI).
 
+Currently, courses taught by multiple instructors -- the same course label,
+number, department, etc., but with more than 1 instructor -- are being
+treated as different courses.
+
 Currently, no associations are being drawn between courses and 
 departments The logic is still present, but is commented out.
 """
@@ -272,15 +276,14 @@ def write_course_rdf(cleanRows):
             ])
 
 #The top-level function
-def main():
+def main(inFile, outFile):
     g = Graph()
     g.bind("blocal",BLOCAL)
     g.bind("vivo",VIVO)
     g.bind("vitro", VITRO)
     g.bind("owl", OWL)
 
-    bannerRowList = read_banner_csv(
-        'data/in/Course_instructor_data_PROD_20170706.txt')
+    bannerRowList = read_banner_csv(inFile)
     get_vivo_shortIDs()
     
     matchedRows = [bruId_lookup_and_clean(courseRow)
@@ -292,8 +295,10 @@ def main():
 
     for stmt in statements:
         g.add(stmt)
-    print g.serialize(destination='data/out/banner_Spring2017.n3', format='n3')
+    print g.serialize(destination=outFile, format='n3')
 
 
 if __name__ == "__main__":
-    main()
+    in_file = sys.argv[1]
+    out_file = sys.argv[2]
+    main(in_file, out_file)
