@@ -1,20 +1,20 @@
 import ldap
 
-from config import settings
+from config import development as settings
 
 LDAP_USER = settings.config['LDAP_USER']
 LDAP_PASSWORD = settings.config['LDAP_PASSWORD']
 
 #setup ldap
 l = ldap.initialize('ldap://directory.brown.edu')
-username = "cn=%s,ou=special users,dc=brown,dc=edu" % LDAP_USER
+username = "cn={},ou=special users,dc=brown,dc=edu".format(LDAP_USER)
 password = LDAP_PASSWORD
 try:
     l.protocol_version = ldap.VERSION3
     l.simple_bind_s(username, password)
     valid = True
-except Exception, error:
-    print error
+except:
+    raise
 
 def _f(attrs, key):
     """
@@ -32,7 +32,10 @@ def read_results(rsp):
     out = {}
     for item in rsp:
         for k,v in item[1].items():
-            out[k] = v[0]
+            try:
+                out[k] = v[0].decode('utf-8')
+            except:
+                raise UnicodeError(v[0])
     return out
 
 def run_search(search_pair):

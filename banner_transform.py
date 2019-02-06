@@ -33,17 +33,19 @@ from rdflib import RDF, RDFS, XSD, OWL
 
 import csv
 import json
-from collections import defaultdict
+import collections
 import uuid
 import requests
+import pprint
 
 import ldap_client
-from config import settings
+from config import development as settings
 #from departmentMap import deptCodeMap
 
 query_url = settings.config['RAB_QUERY_API']
 email = settings.config['ADMIN_EMAIL']
 passw = settings.config['ADMIN_PASS']
+logDir = os.path.join(os.getcwd(),'log')
 
 vivoName = "http://vivo.brown.edu/individual/"
 VIVO = Namespace('http://vivoweb.org/ontology/core#')
@@ -56,17 +58,16 @@ BLOCAL = Namespace('http://vivo.brown.edu/ontology/vivo-brown/')
 #These values are repeatedly referenced by multiple courses,
 #so it seemed mappings global mappings were in order.
 termMap = {}
-shortIdMap = {}
-courseMap = defaultdict(dict)
+courseMap = collections.defaultdict(dict)
 
 #The list of statements that will be added to the RDF graph
 statements = []
 
-def UnicodeDictReader(utf8_data, **kwargs):
-    csv_reader = csv.DictReader(utf8_data, **kwargs)
-    for row in csv_reader:
-        yield dict((key, value.decode('iso-8859-1'))
-            for key, value in row.iteritems() if type(value) != list)
+# def UnicodeDictReader(utf8_data, **kwargs):
+#     csv_reader = csv.DictReader(utf8_data, **kwargs)
+#     for row in csv_reader:
+#         yield dict((key, value)
+#             for key, value in row.items() if type(value) != list)
 
 def read_banner_csv(bannerIn):
     headers=['TERM CODE',
@@ -85,15 +86,20 @@ def read_banner_csv(bannerIn):
         'PRIMARY INSTRUCTOR',
         'GRADUATE STUDENT',
         'INSTRUCTOR NAME',
+        'EMPTY_DELIMITER'
         ]
     bannerRowList = []
-    with open(bannerIn, 'rb') as bannerCsv:
-        csvDictObj = UnicodeDictReader(bannerCsv, fieldnames=headers, delimiter='\t')
+    with open(bannerIn, 'r', encoding='Windows-1252') as bannerCsv:
+        csvDictObj = csv.DictReader(bannerCsv, fieldnames=headers, delimiter='\t')
         for row in csvDictObj:
+            del row['EMPTY_DELIMITER']
             bannerRowList.append(row)
     return bannerRowList
 
 def get_vivo_shortIDs():
+    # No longer filtering for active faculty
+    # REMOVED
+    # ?fac a vivo:FacultyMember .
     query = """
     PREFIX vivo: <http://vivoweb.org/ontology/core#>
     PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
@@ -102,41 +108,69 @@ def get_vivo_shortIDs():
     SELECT DISTINCT ?fac ?shortID
     WHERE
     {
-      ?fac a vivo:FacultyMember .
       ?fac blocal:shortId ?shortID .
     }
     """
     headers = {'Accept': 'text/csv', 'charset':'utf-8'} 
     data = { 'email': email, 'password': passw, 'query': query }
     resp = requests.post(query_url, data=data, headers=headers)
+    short_id_map = {}
     if resp.status_code == 200:
         rdr = csv.reader(resp.text.split('\n'), delimiter=',')
-        rdr.next()
+        next(rdr)
         for row in rdr:
             try:
                 facURI = row[0]
                 shortID = row[1]
-                shortIdMap[shortID] = facURI
+                short_id_map[shortID] = facURI
             except IndexError:
                 continue
             except:
                 raise Exception
     else:
         raise Exception("Bad query!")
+    return short_id_map
 
-def bruId_lookup_and_clean(courseRow):
-    bruId = courseRow['INSTRUCTOR BROWN ID']
+def get_ldap_ids(courseRows):
+    bruids = { row['INSTRUCTOR BROWN ID'] for row in courseRows }
+    bruid_map = {}
+    ldap_log = {}
+    for bruid in bruids:
+        ldap_attrs = ldap_client.by_id(bruid)
+        ldap_log[bruid] = ldap_attrs
+        try:
+            shortid = ldap_attrs['brownshortid']
+        except KeyError:
+            print("No shortid mapped from {}".format(bruid))
+            shortid = None
+        bruid_map[bruid] = shortid
+    with open(os.path.join(logDir, 'ldap_index.json'),'w') as f:
+        json.dump(ldap_log, f, sort_keys=True, indent=4)
+    return bruid_map
+
+def log_skipped_rows(courses, shortURIMap, bruShortMap):
+    skipped = []
+    for row in courses:
+        try:
+            shortid = bruShortMap[row['INSTRUCTOR BROWN ID']] # In LDAP
+            url = shortURIMap[shortid] #In VIVO
+        except:
+            skipped.append(row)
+    with open(os.path.join(logDir, 'skipped_rows.csv'),'w') as f:
+        fieldnames = list(skipped[0].keys())
+        wrtr = csv.DictWriter(f, fieldnames=fieldnames)
+        wrtr.writeheader()
+        for row in skipped:
+            wrtr.writerow(row)
+
+def map_banner_ids(courseRow, shortURIMap, bruShortMap):
     try:
-        ldap_attrs = ldap_client.by_id(bruId)
-        ldapShort = ldap_attrs.get('brownshortid')
-    except KeyError:
+        shortid = bruShortMap[courseRow['INSTRUCTOR BROWN ID']]
+        url = shortURIMap[shortid]
+    except:
         return None
-    try:
-        facURI = shortIdMap[ldapShort]
-    except KeyError:
-        return None
-    courseRow['shortId'] = ldapShort
-    courseRow['teacherURI'] = URIRef(facURI)
+    courseRow['shortId'] = shortid
+    courseRow['teacherURI'] = URIRef(url)
     return courseRow
 
 def clean_title(courseTitle):
@@ -150,7 +184,8 @@ def make_uuid_uri(base, prefix):
         query = "ASK {{<{0}> ?p ?o}}"
         data = {'email': email, 'password': passw, 'query': query.format(new_uri)}
         resp = requests.post(query_url, data=data, headers=header)
-        if resp.content == 'false':
+        existing = resp.content.decode('utf-8')
+        if existing == 'false':
             return URIRef(new_uri)
         else:
             continue
@@ -283,19 +318,23 @@ def main(inFile, outFile):
     g.bind("vitro", VITRO)
     g.bind("owl", OWL)
 
-    bannerRowList = read_banner_csv(inFile)
-    get_vivo_shortIDs()
-    
-    matchedRows = [bruId_lookup_and_clean(courseRow)
-                    for courseRow in bannerRowList]
-    cleanRows = [row_cleanup(courseRow)
-                    for courseRow in matchedRows if courseRow]
+    print("Data Prep")
+    banner_rows = read_banner_csv(inFile)
+    auth_map = get_vivo_shortIDs()
+    ldap_map = get_ldap_ids(banner_rows)
+
+    log_skipped_rows(banner_rows, auth_map, ldap_map)    
+    mapped_rows = [ map_banner_ids(row, auth_map, ldap_map)
+                    for row in banner_rows ]
+    print("Munging data")
+    cleaned_rows = [ row_cleanup(row) for row in mapped_rows if row ]
+    print("Writing RDF")
     write_term_rdf()
-    write_course_rdf(cleanRows)
+    write_course_rdf(cleaned_rows)
 
     for stmt in statements:
         g.add(stmt)
-    print g.serialize(destination=outFile, format='n3')
+    print(g.serialize(destination=outFile, format='n3'))
 
 
 if __name__ == "__main__":

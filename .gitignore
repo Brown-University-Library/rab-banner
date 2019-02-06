@@ -1,3 +1,6 @@
 *.pyc
 config/development.py
 data/*
+.direnv/
+.envrc
+log/
