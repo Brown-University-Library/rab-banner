@@ -1,6 +1,6 @@
 import ldap
 
-from config import development as settings
+from config import settings
 
 LDAP_USER = settings.config['LDAP_USER']
 LDAP_PASSWORD = settings.config['LDAP_PASSWORD']
