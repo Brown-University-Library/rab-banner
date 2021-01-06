@@ -39,7 +39,7 @@ import requests
 import pprint
 
 import ldap_client
-from config import development as settings
+from config import settings
 #from departmentMap import deptCodeMap
 
 query_url = settings.config['RAB_QUERY_API']
@@ -185,7 +185,7 @@ def make_uuid_uri(base, prefix):
         data = {'email': email, 'password': passw, 'query': query.format(new_uri)}
         resp = requests.post(query_url, data=data, headers=header)
         existing = resp.content.decode('utf-8')
-        if existing == 'false':
+        if existing.strip().endswith('false'):
             return URIRef(new_uri)
         else:
             continue
